@@ -1,0 +1,129 @@
+---
+title: "NYPD Shooting Report"
+author: "It's a secret :)"
+date: "18/06/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# __INTRODUCTION__
+
+In this report, we will look at the NYPD shooting report. This report contains a breakdown of every shooting incident that occurred in NYC, from 2006 to 2020. In it, we find in which precinct the crime took place, the time and date, as well as if the person died or not.
+The data is available at the following URL: https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic
+Analyzing this Data will allow us to get a better understanding of where the crimes generally take place, who are the victims and for what reasons.
+
+
+## Library
+We will be using lubridate and tidyverse for our libraries to read and convert the dates as a date object.
+```{r library, include = FALSE}
+library(lubridate)
+library(tidyverse)
+library(dplyr)
+```
+
+
+## Getting and Reading the data
+
+The following chunks of code allows us to get access to the data and store it in the variable NYPD_data
+```{r get_NYPD_data,message=FALSE}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD "
+# This line of code gives us access to the report
+```
+
+```{r read_NYPD, message=FALSE}
+NYPD_data <- read_csv(url)
+summary(NYPD_data)
+```
+As we can see, this report contains 19 columns which describe who committed the crime, where, on whom, at what time, etc...
+However, some of these columns are not needed for our analysis, so let's get rid of them.
+We will also add a column, the population by Borough, as it will be useful if we want to calculate the average by borough
+
+## Tidying our data
+```{r tidy_data, message=FALSE}
+BORO_Url <- "https://data.cityofnewyork.us/api/views/h2bk-zmw6/rows.csv?accessType=DOWNLOAD"
+BORO_pop <- read_csv(BORO_Url)
+BORO_pop <- BORO_pop %>% rename(BORO = Borough)
+BORO_pop$BORO = toupper(BORO_pop$BORO)
+NYPD_tidy <- NYPD_data %>% select(-c(X_COORD_CD:Lon_Lat)) %>% mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>% 
+             rename(Date = OCCUR_DATE, Time = OCCUR_TIME) 
+NYPD_tidy <- NYPD_tidy %>% full_join(BORO_pop) 
+NYPD_tidy$STATISTICAL_MURDER_FLAG = as.numeric(NYPD_tidy$STATISTICAL_MURDER_FLAG )
+NYPD_tidy
+
+```
+## Graph analysis
+
+Here we have two graphs. The first one represents the number of murder by gun by Borough in NYC.
+The second graph allows us to visualize the number of victims of gun violence by race in NYC
+
+```{r Murder_by_Boro_Vizu, message=FALSE}
+
+Crime_Boro <- NYPD_tidy %>% group_by(BORO, PRECINCT, Date, Population) %>% 
+  summarize(deaths = sum(STATISTICAL_MURDER_FLAG)) %>% 
+  select(Date, BORO, PRECINCT, Population, deaths) %>% 
+  ungroup() %>% group_by(BORO) %>% summarize(total = sum(deaths)) %>% ungroup()
+Crime_Boro
+
+Crime_Boro %>% ggplot(aes(x = BORO, y = total)) + geom_point(aes(color = "total")) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Overall Number of Murders by Borough in NYC", y = NULL)
+```
+
+### Analysis of the graph
+
+As we can see, some Boroughs are overly represented in the statistics. Staten Island has the fewest murder by guns in NYC, whereas Brookly has the highest. 
+To have a better understanding and analysis of this fact, we can ask ourselves many questions. For instance, it would be important here to see if there is a correlation with the gun violence, and the average household income. We know that there tends to be more crime in poor areas, so we could see if this is true here.
+We could also see if these areas tend to under report gun crimes. Perhaps there is more gun crimes in Staten Island, but the inhabitants do not want to report it.
+Finally, perhaps these areas have less cops, so the inhabitants of the dangerous boroughs have no other choice to defend themselves.
+
+```{r Murder_by_race, message=FALSE}
+
+Crime_Race <- NYPD_tidy %>% filter(STATISTICAL_MURDER_FLAG >=1) %>% na.omit(PERP_RACE)%>% group_by(PERP_RACE, VIC_RACE, Date) %>%
+  summarize(deaths = sum(STATISTICAL_MURDER_FLAG)) %>% select(PERP_RACE, VIC_RACE, Date, deaths) %>% ungroup() %>%
+  group_by(PERP_RACE, VIC_RACE) %>% summarize(total_by_race = sum(deaths))
+Crime_Race
+Crime_Race %>% ggplot(aes(total_by_race, PERP_RACE)) + geom_point() + facet_grid(rows = vars(Crime_Race$VIC_RACE)) +
+  theme(strip.text.y =  element_text(angle = 0)) + labs(title = "Victims of gun violence by race in NYC")
+
+```
+
+### Analysis of this graph
+
+This graph reads: " around 100 White Hispanic have killed Black Hispanic with a gun in NYC" (column 2)
+Once more, we can ask ourselves many questions. 
+Is it possible that some murders have not been reported ? 
+We could do a cross check by seeing who tends to live in which Boroughs. As we've seen earlier, some are more prone to gun violence than the rest; so perhaps economic inequality plays a role here.
+Finally, one should not generalize entire race or ethnicity by seeing this graph.Perhaps the source of the data is biased.
+
+## Linear model
+```{r linear_model}
+New_df <- NYPD_tidy %>% full_join(Crime_Boro)
+mod <- lm(total ~ Population, data = New_df)
+summary(mod)
+NYPD_w_pred <- New_df %>% mutate(pred = predict(mod))
+NYPD_w_pred %>% ggplot() + geom_point(aes(x = Population, y = total ), color = "blue")+
+  geom_point(aes(x = Population, y = pred), color ="red") + labs(title = "Number of murder depending on population") + 
+  ylab("Total number of murders") + xlab("Population of the Borough") 
+```
+
+### Analysis of this model
+
+I used a linear regression to see if the number of murder goes up with the population. The model is in red in this graph.
+As we can see with this graph, the correlation isn't as straightforward as one might think. We can infer from this graph that we must use other parameters in our model (like the average income or if the area is well connected with the police force and so on).
+
+
+# Conclusion
+In conclusion, we could do a more thorough analysis with other variables and checking the correlation. 
+However, it is really important that this type of graph should not be used to stigmatize entire population. 
+Here, Racism and prejudice represent the two biggest biases, as they would use such a graphic to reinforce their preconceptions. 
+As for one of my personal bias, as a French this type of categorizing data seem really strange to me, as any kind of race statistics are banned in France.
+Also, since we don't have guns, this type of problem seem foreign to me.
+```{r session_info}
+sessionInfo()
+```
+
